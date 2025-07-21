@@ -1,0 +1,12 @@
+langgraph
+langchain-community
+langchain-anthropic
+langchain-openai
+python-dotenv
+fast-dash
+youtube-transcript-api
+pypdf2
+beautifulsoup4
+duckduckgo-search
+ddgs
+langchain-tavily
