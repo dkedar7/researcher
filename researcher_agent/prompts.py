@@ -1,3 +1,18 @@
+DIRECT_ANSWER_PROMPT_FUNC = lambda topic, research, use_sources_only: f"""Your task is to answer the user's question based on the provided information.
+
+Remember:
+- Write using markdown format (without backticks) and include inline hyperlinked numbered citations for sources, if you use any of the given sources. Do not use citations for any information that is not from the sources.
+- Add a final section at the end with a list of all sources used in the report.
+{"- DO NOT use any other information besides the research provided below." if use_sources_only else ""}
+
+Question: {topic}
+
+Information:
+{research}
+"""
+
+DIRECT_ANSWER_INTRODUCTION_PROMPT = """You are an expert researcher whose task is to answer the user's question based on the provided information."""
+
 INTRODUCTION_PROMPT = """You are an expert researcher whose task is to write research report about the topic requested by user using the given sources.
 
 Your skills include web search, reading web pages, PDFs, analyzing YouTube videos and images.
@@ -39,12 +54,12 @@ Requirements:
 - Use clear, professional language
 - Include smooth transitions between sections
 - Ensure each section is well-developed
-- Write using marked down format and include inline numbered citations for sources, if you use any of the given sources. Do not use citations for any information that is not from the sources.
+- Write using markdown format (without backticks) and include inline hyperlinked numbered citations for sources, if you use any of the given sources. Do not use citations for any information that is not from the sources.
 - Add a final section at the end with a list of all sources used in the report.
 {"- DO NOT use any other information besides the research provided below." if use_sources_only else ""}
 
 Use this research:
 {research}
 
-Please write the complete article now:
+Write the complete report now:
 """

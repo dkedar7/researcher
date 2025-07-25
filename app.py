@@ -12,7 +12,6 @@ researcher_agent = Researcher(
     researcher="openai:o4-mini",
     planner="openai:o4-mini")
 
-
 query_component = dmc.Textarea(
     placeholder="Send a message to the agent",
     autosize=True,
@@ -22,13 +21,7 @@ query_component = dmc.Textarea(
 )
 
 web_page_urls_component = dmc.TagsInput(
-    description="Include all the reference web URLs (including PDFs)",
-    placeholder="Enter URLs separated by commas",
-    value=[]
-)
-
-youtube_urls_component = dmc.TagsInput(
-    description="Include all reference YouTube URLs",
+    description="Include all the reference web URLs (HTML, PDF, YouTube, etc.)",
     placeholder="Enter URLs separated by commas",
     value=[]
 )
@@ -44,7 +37,7 @@ web_search_component = dmc.Switch(
 	withThumbIndicator=True,
 )
 
-use_sources_ony_component = dmc.Switch(
+use_sources_only_component = dmc.Switch(
 	labelPosition="right",
 	label="Use given sources only",
     description="If checked, the agent will only use the provided sources for research",
@@ -56,32 +49,35 @@ use_sources_ony_component = dmc.Switch(
 	withThumbIndicator=True,
 )
 
-report_length_component = dmc.NumberInput(
-    label="Report Length (in words)",
-    description="Specify the desired length of the report in words",
-    value=200,
-    min=50,
-    max=1000,
-    step=50,
-    required=True)
+extended_report_component = dmc.Switch(
+	labelPosition="right",
+	# label="Use given sources only",
+    description="If checked, the agent will generate a detailed report (~1000 words)",
+	size="sm",
+	radius="lg",
+	color="#5c7cfa",
+    checked=False,
+	disabled=False,
+	withThumbIndicator=True,
+)
 
 
 # Build the app
 @fastdash(stream=True, loader=False, mode="external", scale_height=1.5)
-def researcher(message, 
+def researcher(message,
                sources: web_page_urls_component, 
-               youtube_urls: youtube_urls_component, 
                web_search: web_search_component,
-               use_sources_only: use_sources_ony_component,
-               report_length: report_length_component) -> Chat(stream=True, stream_limit=50):
+               use_sources_only: use_sources_only_component,
+               extended_report: extended_report_component) -> Chat(stream=True, stream_limit=50):
 
     update('report', message, property="query")
 
     response = ""
 
     researcher_agent.web_search = web_search
-    researcher_agent.extractor = MultiSourceTextExtractor()
-    researcher_agent.extractor.create_vectorstore_index(sources + youtube_urls)
+    researcher_agent.use_sources_only_component = use_sources_only_component
+    researcher_agent.extended_report = extended_report
+    researcher_agent.extractor.create_vectorstore_index(sources)
 
     graph = researcher_agent.graph
     agent_state = graph.get_state(config=config)
@@ -99,7 +95,7 @@ def researcher(message,
         if mode == "messages":
             chunk, metadata = chunk
                 
-            if chunk.content and metadata["langgraph_node"] in ["report_writer", "begin"]:
+            if chunk.content and metadata["langgraph_node"] in ["writer", "begin"]:
                 response += str(chunk.content)
                 update('report', response, property="response")
     

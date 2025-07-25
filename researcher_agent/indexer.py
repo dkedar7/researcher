@@ -127,7 +127,7 @@ class MultiSourceTextExtractor:
                 docs = loader.load()
                 
                 # Update metadata
-                for doc in docs:
+                for doc in docs[:100]:
                     doc.metadata.update({
                         "source": url,
                         "type": "webpage"
@@ -158,8 +158,9 @@ class MultiSourceTextExtractor:
                 docs = loader.load()
                 
                 # Update metadata
-                for doc in docs:
+                for doc in docs[:100]:
                     doc.metadata.update({
+                        "title": doc.metadata.get("title", "Web PDF Document"),
                         "source": url,
                         "type": "web_pdf"
                     })
@@ -194,8 +195,9 @@ class MultiSourceTextExtractor:
             docs = loader.load()
             
             # Update metadata
-            for doc in docs:
+            for doc in docs[:100]:
                 doc.metadata.update({
+                    "title": doc.metadata.get("title", file_path.stem),
                     "source": str(file_path),
                     "type": f"local_{file_path.suffix[1:]}",
                     "filename": file_path.name
@@ -348,7 +350,7 @@ class MultiSourceTextExtractor:
         # Create vector store
         logger.info("Creating vector store index")
         self.vectorstore = InMemoryVectorStore.from_documents(
-            chunked_docs, 
+            chunked_docs[:100], 
             self.embedding_model
         )
         

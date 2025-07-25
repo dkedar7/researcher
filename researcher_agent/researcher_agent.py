@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 from langchain_tavily import TavilySearch
 load_dotenv()
 
-from typing import TypedDict, Annotated, Literal
+from typing import Optional, TypedDict, Annotated, Literal
 from pydantic import BaseModel, Field
 
 from langgraph.graph import StateGraph, START, END, add_messages
@@ -12,12 +12,13 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from langchain.chat_models import init_chat_model
 from langgraph.checkpoint.memory import MemorySaver
 
-from .prompts import INTRODUCTION_PROMPT, PLANNER_PROMPT, WRITING_PROMPT_FUNC
+from .prompts import DIRECT_ANSWER_INTRODUCTION_PROMPT, DIRECT_ANSWER_PROMPT_FUNC, INTRODUCTION_PROMPT, PLANNER_PROMPT, WRITING_PROMPT_FUNC
 from .indexer import MultiSourceTextExtractor
 
 
 # llm = init_chat_model(model="anthropic:claude-3-7-sonnet-latest")
 llm = init_chat_model(model="openai:o4-mini")
+UNDEFINED = "undefined"
 
 class SectionPlan(BaseModel):
     """Always use this tool to create a list of sections for the given topic."""
@@ -26,7 +27,7 @@ class SectionPlan(BaseModel):
 # Define state
 class State(TypedDict):
 
-    topic: str
+    topic: Optional[str] = None
     messages: Annotated[list, add_messages]
     planned_sections: list
     plan_status: str
@@ -40,11 +41,12 @@ class Researcher:
     def __init__(self, 
                  researcher="anthropic:claude-3-7-sonnet-latest",
                  planner="anthropic:claude-3-7-sonnet-latest",
+                 extended_report=False,
                  web_search=False,
                  use_sources_only=True,
                  other_tools=[],
                  additional_sources=[],
-                 report_length=200):
+                 report_length=1000):
         """
         Initialize the Researcher agent with the given parameters.
         :param researcher: The model to use for the researcher agent.
@@ -58,6 +60,7 @@ class Researcher:
 
         self.researcher = researcher
         self.planner = planner
+        self.extended_report = extended_report
         self.web_search = web_search
         self.use_sources_only = use_sources_only
         self.other_tools = other_tools
@@ -72,29 +75,35 @@ class Researcher:
 
     def begin(self, state):
 
+        if not self.extended_report:
+            return dict(topic=state["messages"][-1].content, end_execution=False)
+
         messages = [SystemMessage(INTRODUCTION_PROMPT)] + state["messages"]
         response = self.planner_model.invoke(messages)
+        print (f"Response from planner: {response.content}")
     
         if response.content.lower().strip().startswith("##### topic:"):
             topic = response.content.lower().strip().split("##### topic:")[1]
-            return Command(update=dict(topic=topic, end_execution=False))
+            return dict(topic=topic, end_execution=False)
     
-        else:
-            return Command(update=dict(topic=None, messages=response.content, end_execution=False))
+        print ("No topic provided, waiting for user input...")
+        return dict(topic=UNDEFINED, end_execution=True)
 
-    def router(self, state) -> Literal["outline", "__end__"]:
-        if state.get("topic"):
+    def router(self, state):
+        if not self.extended_report:
+            return "researcher"
+
+        if state.get("topic", UNDEFINED) != UNDEFINED:
             return "outline"
 
-        else:
-            return Command(goto=END, update=dict(end_execution=True))
+        return END
         
 
     def outline(self, state):
 
         messages = [SystemMessage(PLANNER_PROMPT)] + state["messages"]
     
-        llm_section = self.planner_model.bind_tools([SectionPlan])
+        llm_section = self.planner_model.bind_tools([SectionPlan], tool_choice="SectionPlan")
         response = llm_section.invoke(messages)
     
         sections = response.tool_calls[0]['args']['sections']
@@ -106,7 +115,7 @@ class Researcher:
     
         planned_sections_text = "\n - ".join([""] + planned_sections)
         verification = interrupt(f"\n\n Does this look like a good outline? {planned_sections_text}\n\n"
-                                 "Please respond with 'yes' to approve, 'no' to cancel, or any other text to review again. "
+                                 "Please respond with 'yes' to approve, 'no' to remake, or any other text to review again. "
                                  "You can also type 'cancel' to cancel the plan. \n\n"
                                  "**Use the query box on the left to respond and hit 'Submit' to continue.**")
     
@@ -119,7 +128,7 @@ class Researcher:
         else:
             return dict(plan_status="in_review")
 
-    def post_review_router(self, state) -> Literal["researcher", "outline", "__end__"]:
+    def post_review_router(self, state):
         if plan_status := state.get("plan_status") == "approved":
             return "researcher"
 
@@ -131,15 +140,15 @@ class Researcher:
         
     def research(self, state):
         
-        topic = state["topic"]
-        sections = state["planned_sections"]
+        topic = state["topic"] or ""
+        sections = state.get("planned_sections", [topic])
     
         # Create the research
         research = ""
         for section in sections:
             section_research = ""
 
-            if self.additional_sources:
+            if self.extractor.vectorstore:
                 section_sources = self.extractor.search(query=section, k=3)
                 section_research += "\n\n".join([f"Reference: {doc.metadata['title']} ({doc.metadata['source']})\nContent: {doc.page_content}" for doc in section_sources])
 
@@ -155,13 +164,17 @@ class Researcher:
     
         return {"research": research}
 
-    def report_writer(self, state):
+    def writer(self, state):
 
-        topic = state["topic"]
-        sections = state["planned_sections"]
+        topic = state["topic"] or UNDEFINED
+        sections = state.get("planned_sections", [topic])
         research = state["research"]
-    
-        writing_prompt = WRITING_PROMPT_FUNC(topic, sections, research, use_sources_only=self.use_sources_only, n_words=self.n_words)
+
+        if self.extended_report:
+            writing_prompt = WRITING_PROMPT_FUNC(topic, sections, research, use_sources_only=self.use_sources_only, n_words=self.n_words)
+
+        else:
+            writing_prompt = DIRECT_ANSWER_PROMPT_FUNC(topic, research, use_sources_only=self.use_sources_only)
 
         # Assign tools
         tools = []
@@ -173,7 +186,7 @@ class Researcher:
         
         report = llm_with_tools.invoke(writing_prompt)
     
-        return {"report": report.content, "end_execution": True}
+        return {"report": report.content, "end_execution": True, "messages": report}
 
     def build_graph(self):
         workflow = StateGraph(State)
@@ -182,17 +195,17 @@ class Researcher:
         # workflow.add_node("router", self.router)
         workflow.add_node("outline", self.outline)
         workflow.add_node("researcher", self.research)
-        workflow.add_node("report_writer", self.report_writer)
+        workflow.add_node("writer", self.writer)
         workflow.add_node("human_review", self.human_review)
 
         
         workflow.add_edge(START, "begin")
         # workflow.add_edge("begin", "router")
-        workflow.add_conditional_edges("begin", self.router)
+        workflow.add_conditional_edges("begin", self.router, {"outline": "outline", "researcher": "researcher", END: END})
         workflow.add_edge("outline", "human_review")
-        workflow.add_conditional_edges("human_review", self.post_review_router)
-        workflow.add_edge("researcher", "report_writer")
-        workflow.add_edge("report_writer", END)
+        workflow.add_conditional_edges("human_review", self.post_review_router, {"researcher": "researcher", "outline": "outline", END: END})
+        workflow.add_edge("researcher", "writer")
+        workflow.add_edge("writer", END)
         
         memory = MemorySaver()
         graph = workflow.compile(checkpointer=memory)
